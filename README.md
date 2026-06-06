@@ -175,6 +175,14 @@ The extension reconnects automatically to the bridge after sleep or after visiti
 
 ---
 
+## Security model
+
+The bridge listens on `ws://localhost:45678` — **localhost only**, never exposed to the network.
+
+However, any local process can connect to that port. There is no cryptographic authentication between the bridge and the Safari extension. The threat model assumes that other processes running under your user account are trusted. If you run untrusted local software, be aware that it could theoretically connect to the bridge.
+
+`safari_javascript` executes arbitrary JavaScript in the active tab by design. Treat it like browser DevTools — only use it on pages you trust.
+
 ## Development
 
 All extension file edits go in:

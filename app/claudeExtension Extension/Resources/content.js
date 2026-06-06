@@ -1,10 +1,11 @@
 /**
  * Claude for Safari — Content Script
  *
- * Injected into every page. Provides helper utilities that the background
- * script can call via scripting.executeScript. Currently minimal — all DOM
- * interactions are done inline by the background script.
+ * Injected into every page at document_idle.
+ * Currently minimal — all DOM interactions are performed inline by the
+ * background script via tabs.executeScript.
+ *
+ * This file intentionally left sparse. It exists so Safari loads the
+ * content script context on every page, which can reduce first-injection
+ * latency for future helper utilities.
  */
-
-// Expose a flag so the background can detect injection
-window.__claudeForSafari = true;

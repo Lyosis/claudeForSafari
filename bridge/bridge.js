@@ -85,7 +85,9 @@ function startPrimary() {
 
       // ── Safari extension registration ───────────────────────────────────
       if (msg.type === 'connected') {
-        profileName = msg.profile || 'default';
+        // Sanitise profile name: strip control characters, cap at 50 chars.
+        const raw = String(msg.profile || 'default');
+        profileName = raw.replace(/[\x00-\x1f\x7f]/g, '').slice(0, 50) || 'default';
         profiles.has(profileName)
           ? log(`Profile "${profileName}" reconnected`)
           : log(`Profile "${profileName}" connected`);
@@ -146,6 +148,13 @@ function startRelay() {
     log('Relay connection lost — retrying as primary in 3 s...');
     isRelay = false;
     relayWs = null;
+    // Reject any commands that were waiting on the primary's response.
+    for (const [id, entry] of pending) {
+      if (id.startsWith('relay_')) {
+        pending.delete(id);
+        entry.reject(new Error('Relay disconnected from primary bridge'));
+      }
+    }
     setTimeout(startPrimary, 3000);
   });
 

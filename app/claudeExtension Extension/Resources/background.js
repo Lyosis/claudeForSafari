@@ -166,6 +166,10 @@ function waitForLoad(tabId, timeoutMs = 15000) {
 // ── Commands ───────────────────────────────────────────────────────────────
 
 async function cmdNavigate({ url, tabId: tId }) {
+  // Block non-http(s) schemes (e.g. javascript:) to prevent unintended execution.
+  if (url && !/^https?:\/\//i.test(url) && !/^about:/i.test(url)) {
+    throw new Error(`Unsupported URL scheme. Only http://, https://, and about: are allowed.`);
+  }
   let tabId;
   if (tId) {
     const tab = await browser.tabs.update(tId, { url });
