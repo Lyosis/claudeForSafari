@@ -1,0 +1,36 @@
+{
+  "manifest_version": 2,
+  "name": "Claude for Safari",
+  "version": "1.1.0",
+  "description": "Allows Claude to read and control Safari pages",
+
+  "browser_action": {
+    "default_popup": "popup.html",
+    "default_title": "Claude for Safari"
+  },
+
+  "background": {
+    "scripts": ["background.js"],
+    "persistent": true
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+
+  "permissions": [
+    "activeTab",
+    "tabs",
+    "scripting",
+    "storage",
+    "alarms",
+    "http://localhost/*",
+    "https://localhost/*",
+    "<all_urls>"
+  ]
+}

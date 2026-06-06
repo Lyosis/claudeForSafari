@@ -1,0 +1,12 @@
+{
+  "name": "claude-for-safari-bridge",
+  "version": "1.0.0",
+  "description": "MCP bridge server for Claude ↔ Safari extension",
+  "main": "bridge.js",
+  "scripts": {
+    "start": "node bridge.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

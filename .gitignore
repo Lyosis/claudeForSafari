@@ -1,0 +1,38 @@
+# ── macOS ─────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+
+# ── Node (bridge) ─────────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-error.log*
+*.log
+
+# ── Xcode : artefacts de build ────────────────────────
+build/
+DerivedData/
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM
+*.dSYM.zip
+
+# ── Xcode : état utilisateur (non partageable) ────────
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+*.xccheckout
+*.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+
+# ── Swift Package Manager ─────────────────────────────
+.swiftpm/
+.build/
+
+# ── Divers ────────────────────────────────────────────
+*.swp
+*~

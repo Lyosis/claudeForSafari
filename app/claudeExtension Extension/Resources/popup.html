@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Claude for Safari</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <span class="logo">⚡</span>
+      <h1>Claude for Safari</h1>
+    </div>
+
+    <div class="field">
+      <label for="profileName">Nom du profil</label>
+      <input
+        type="text"
+        id="profileName"
+        placeholder="default"
+        maxlength="30"
+        autocomplete="off"
+        spellcheck="false"
+      >
+      <p class="hint">Identifie ce profil Safari auprès de Claude.<br>Laisser vide = "default".</p>
+    </div>
+
+    <button id="save">Enregistrer</button>
+
+    <p id="status" aria-live="polite"></p>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
