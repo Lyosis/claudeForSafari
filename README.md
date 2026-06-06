@@ -1,6 +1,6 @@
 # Claude for Safari
 
-Permet à Claude Desktop de contrôler Safari — navigation, lecture de pages, clics, formulaires — via le protocole MCP, exactement comme "Claude in Chrome".
+Gives Claude Desktop the ability to control Safari — navigate pages, read content, click elements, fill forms — via the MCP protocol, just like "Claude in Chrome".
 
 ## Architecture
 
@@ -11,26 +11,26 @@ Claude Desktop  (MCP stdio)
       ↕  WebSocket  ws://localhost:45678
 Safari Extension background.js  (MV2)
       ↕  browser.tabs / executeScript
-    Page Safari active
+    Active Safari tab
 ```
 
 ---
 
-## Structure du dépôt
+## Repository structure
 
 ```
-extension Claude safari/          ← racine git
+claudeForSafari/                  ← git root
 ├── .gitignore
 ├── README.md
-├── bridge/                       ← pont Node.js (MCP ↔ WebSocket)
+├── bridge/                       ← Node.js bridge (MCP ↔ WebSocket)
 │   ├── bridge.js
 │   ├── package.json
 │   └── package-lock.json
-└── app/                          ← projet Xcode
+└── app/                          ← Xcode project
     ├── claudeExtension.xcodeproj
-    ├── claudeExtension/          ← app hôte Swift (macOS)
+    ├── claudeExtension/          ← Swift host app (macOS)
     └── claudeExtension Extension/
-        └── Resources/            ← SOURCE UNIQUE des fichiers de l'extension
+        └── Resources/            ← SINGLE SOURCE for extension files
             ├── manifest.json
             ├── background.js
             ├── content.js
@@ -39,30 +39,30 @@ extension Claude safari/          ← racine git
             └── _locales/
 ```
 
-> **Règle :** toute modification des fichiers de l'extension se fait directement dans `app/claudeExtension Extension/Resources/`. Il n'y a plus de dossier `safari-extension/` séparé.
+> **Rule:** all extension file edits go directly in `app/claudeExtension Extension/Resources/`. There is no separate `safari-extension/` folder.
 
 ---
 
-## Prérequis
+## Requirements
 
-- macOS 14+ (Sonoma ou supérieur)
+- macOS 14+ (Sonoma or later)
 - Xcode 16+
-- Node.js v18+ — [nodejs.org](https://nodejs.org) si pas encore installé
-- Un compte développeur Apple (gratuit suffit pour usage local)
-- Claude Desktop avec support MCP
+- Node.js v18+ — [nodejs.org](https://nodejs.org) if not yet installed
+- An Apple developer account (free account is enough for local use)
+- Claude Desktop with MCP support
 
 ---
 
 ## Installation
 
-### Étape 1 — Cloner le dépôt
+### Step 1 — Clone the repository
 
 ```bash
 git clone git@github.com:Lyosis/claudeForSafari.git
 cd claudeForSafari
 ```
 
-### Étape 2 — Installer les dépendances du bridge
+### Step 2 — Install bridge dependencies
 
 ```bash
 cd bridge
@@ -70,32 +70,32 @@ npm install
 cd ..
 ```
 
-### Étape 3 — Builder l'extension dans Xcode
+### Step 3 — Build the extension in Xcode
 
-1. Ouvrir `app/claudeExtension.xcodeproj` dans Xcode
-2. Sélectionner le scheme **claudeExtension** (l'app hôte)
-3. Choisir **My Mac** comme destination
-4. **Cmd+R** — Xcode compile et lance l'app
+1. Open `app/claudeExtension.xcodeproj` in Xcode
+2. Select the **claudeExtension** scheme (the host app)
+3. Choose **My Mac** as the destination
+4. Press **Cmd+R** — Xcode builds and launches the app
 
-macOS affiche une bannière *"claudeExtension veut ajouter une extension Safari"* → cliquer **Ouvrir les préférences Safari** et cocher l'extension.
+macOS will show a banner: *"claudeExtension wants to add a Safari extension"* → click **Open Safari Preferences** and enable the extension.
 
-### Étape 4 — Activer l'extension dans Safari
+### Step 4 — Enable the extension in Safari
 
-1. Safari → **Réglages (Cmd+,)** → onglet **Extensions**
-2. Cocher **claudeExtension**
-3. Dans la colonne de droite → **Autoriser sur tous les sites**
+1. Safari → **Settings (Cmd+,)** → **Extensions** tab
+2. Check **claudeExtension**
+3. In the right column → **Allow on all websites**
 
-> Sans cette permission, l'injection de scripts dans les pages échouera silencieusement.
+> Without this permission, script injection into pages will fail silently.
 
-### Étape 5 — Configurer Claude Desktop
+### Step 5 — Configure Claude Desktop
 
-Ouvrir (ou créer) :
+Open (or create):
 
 ```
 ~/Library/Application Support/Claude/claude_desktop_config.json
 ```
 
-Ajouter l'entrée `safari` dans `mcpServers` :
+Add the `safari` entry under `mcpServers`:
 
 ```json
 {
@@ -103,96 +103,96 @@ Ajouter l'entrée `safari` dans `mcpServers` :
     "safari": {
       "command": "node",
       "args": [
-        "/chemin/absolu/vers/claudeForSafari/bridge/bridge.js"
+        "/absolute/path/to/claudeForSafari/bridge/bridge.js"
       ]
     }
   }
 }
 ```
 
-Adapter `/chemin/absolu/vers/` selon l'emplacement du dépôt cloné.
+Replace `/absolute/path/to/` with the actual path where you cloned the repo.
 
-Si `node` n'est pas dans le PATH de Claude Desktop, utiliser le chemin complet :
+If `node` is not in Claude Desktop's PATH, use its full path:
 
 ```bash
-which node   # ex. /usr/local/bin/node ou /opt/homebrew/bin/node
+which node   # e.g. /usr/local/bin/node or /opt/homebrew/bin/node
 ```
 
-Puis **redémarrer Claude Desktop**.
+Then **restart Claude Desktop**.
 
 ---
 
-## Démarrage
+## Usage
 
-Le bridge se lance automatiquement avec Claude Desktop.  
-Safari doit être ouvert avec l'extension cochée.
+The bridge starts automatically with Claude Desktop.  
+Safari must be open with the extension enabled.
 
-L'extension se reconnecte automatiquement au bridge après une mise en veille ou une visite dans les Réglages Safari — aucune intervention manuelle nécessaire.
+The extension reconnects automatically to the bridge after sleep or after visiting Safari Settings — no manual action required.
 
 ---
 
-## Outils disponibles (13)
+## Available tools (13)
 
-| Outil | Description |
+| Tool | Description |
 |---|---|
-| `safari_list_profiles` | Lister les profils Safari disponibles |
-| `safari_navigate` | Naviguer vers une URL |
-| `safari_get_page_text` | Lire le texte visible de la page |
-| `safari_read_page` | Obtenir le HTML complet |
-| `safari_javascript` | Exécuter du JavaScript arbitraire |
-| `safari_find` | Trouver des éléments (CSS selector ou texte) |
-| `safari_click` | Cliquer sur un élément |
-| `safari_form_input` | Remplir un champ `<input>` ou `<textarea>` |
-| `safari_scroll` | Faire défiler la page |
-| `safari_tabs_list` | Lister les onglets ouverts |
-| `safari_tabs_create` | Ouvrir un nouvel onglet |
-| `safari_tabs_close` | Fermer un onglet |
-| `safari_tabs_switch` | Activer un onglet par ID |
+| `safari_list_profiles` | List available Safari profiles |
+| `safari_navigate` | Navigate to a URL |
+| `safari_get_page_text` | Read the visible text of the current page |
+| `safari_read_page` | Get the full HTML of the current page |
+| `safari_javascript` | Execute arbitrary JavaScript |
+| `safari_find` | Find elements by CSS selector or text content |
+| `safari_click` | Click an element |
+| `safari_form_input` | Fill an `<input>` or `<textarea>` field |
+| `safari_scroll` | Scroll the page |
+| `safari_tabs_list` | List open tabs |
+| `safari_tabs_create` | Open a new tab |
+| `safari_tabs_close` | Close a tab |
+| `safari_tabs_switch` | Switch to a tab by ID |
 
-> `safari_form_input` supporte les champs `<input>` et `<textarea>`. Les éditeurs riches de type `contenteditable` (Notion, Gmail compose…) ne sont pas encore supportés.
+> `safari_form_input` supports `<input>` and `<textarea>` fields. Rich text editors using `contenteditable` (Notion, Gmail compose, etc.) are not yet supported.
 
 ---
 
-## Dépannage
+## Troubleshooting
 
 **"Safari extension not connected"**
-- Safari est-il ouvert ? L'extension est-elle cochée ?
-- Vérifier que le bridge tourne : `ps aux | grep bridge.js`
-- Regarder les logs : Console.app → filtrer `claude-safari`
+- Is Safari open? Is the extension checked in Safari → Extensions?
+- Check the bridge is running: `ps aux | grep bridge.js`
+- Check logs: Console.app → filter by `claude-safari`
 
-**Permission refusée lors de l'injection**
-→ Safari → Réglages → Extensions → claudeExtension → **Autoriser sur tous les sites**
+**Permission denied on script injection**  
+→ Safari → Settings → Extensions → claudeExtension → **Allow on all websites**
 
-**`safari_get_page_text` échoue sur un onglet interne**  
-→ Les pages internes Safari (`favorites://`, `about:blank`…) ne peuvent pas être injectées. Naviguer d'abord vers une URL `http://` ou `https://`.
+**`safari_get_page_text` fails on an internal tab**  
+→ Internal Safari pages (`favorites://`, `about:blank`, etc.) cannot be injected. Navigate to an `http://` or `https://` URL first.
 
-**Le bridge ne démarre pas**
-→ Vérifier Node.js : `node -v` (v18+ requis)  
-→ Utiliser le chemin absolu de `node` dans `claude_desktop_config.json`
+**Bridge won't start**  
+→ Check Node.js: `node -v` (v18+ required)  
+→ Use the absolute path to `node` in `claude_desktop_config.json`
 
-**Xcode — "No signing certificate"**
-→ Xcode → Settings → Accounts → ajouter l'Apple ID → Download Manual Profiles
+**Xcode — "No signing certificate"**  
+→ Xcode → Settings → Accounts → add your Apple ID → Download Manual Profiles
 
 ---
 
-## Développement
+## Development
 
-Toute modification de l'extension se fait dans :
+All extension file edits go in:
 
 ```
 app/claudeExtension Extension/Resources/
 ```
 
-Après modification de `background.js` ou `manifest.json` :
+After editing `background.js` or `manifest.json`:
 
-1. Rebuilder dans Xcode (Cmd+R)
-2. Safari → Réglages → Extensions → désactiver puis réactiver l'extension  
-   *(ou relancer Safari)*
+1. Rebuild in Xcode (Cmd+R)
+2. Safari → Settings → Extensions → disable then re-enable the extension  
+   *(or restart Safari)*
 
-Le bridge (`bridge/bridge.js`) ne nécessite pas de rebuild — Node.js le recharge au prochain démarrage de Claude Desktop.
+The bridge (`bridge/bridge.js`) does not need a rebuild — Node.js picks up changes on the next Claude Desktop restart.
 
 ---
 
-## Licence
+## License
 
-Projet privé — usage personnel.
+MIT

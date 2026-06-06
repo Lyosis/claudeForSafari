@@ -27,9 +27,9 @@ function save() {
   input.value = name === 'default' ? '' : name;
 
   browser.storage.local.set({ profileName: name }).then(() => {
-    showStatus(`✓ Profil "${name}" enregistré`);
+    showStatus(`✓ Profile "${name}" saved`);
   }).catch((err) => {
-    showStatus('Erreur : ' + err.message, true);
+    showStatus('Error: ' + err.message, true);
   });
 }
 
