@@ -2,6 +2,9 @@
 
 Gives Claude Desktop the ability to control Safari — navigate pages, read content, click elements, fill forms — via the MCP protocol, just like "Claude in Chrome".
 
+[![claudeForSafari MCP server](https://glama.ai/mcp/servers/Lyosis/claudeForSafari/badges/card.svg)](https://glama.ai/mcp/servers/Lyosis/claudeForSafari)
+[![claudeForSafari MCP server](https://glama.ai/mcp/servers/Lyosis/claudeForSafari/badges/score.svg)](https://glama.ai/mcp/servers/Lyosis/claudeForSafari)
+
 ## Architecture
 
 ```
