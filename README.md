@@ -180,11 +180,22 @@ The extension reconnects automatically to the bridge after sleep or after visiti
 
 ## Security model
 
-The bridge listens on `ws://localhost:45678` — **localhost only**, never exposed to the network.
+The bridge listens on `ws://localhost:45678`, bound to the loopback addresses only (`::1` and `127.0.0.1`): it is never reachable from the network.
 
-However, any local process can connect to that port. There is no cryptographic authentication between the bridge and the Safari extension. The threat model assumes that other processes running under your user account are trusted. If you run untrusted local software, be aware that it could theoretically connect to the bridge.
+**Web pages are refused.** Browsers always send an `Origin` header when a page opens a WebSocket, and a page cannot forge it. The bridge only accepts the Safari extension's origin (`safari-web-extension://…`); any other origin gets `403 Forbidden` and is written to the bridge log.
 
-`safari_javascript` executes arbitrary JavaScript in the active tab by design. Treat it like browser DevTools — only use it on pages you trust.
+**A response is only accepted from the socket the command was sent to**, and command IDs are random — another client cannot answer in the extension's place.
+
+**`safari_find` never returns the value of password fields** (it reports `<redacted>` when the field is filled).
+
+What is *not* protected — there is no cryptographic authentication between the bridge and the extension, so the threat model assumes that:
+
+- **other processes running under your user account are trusted** — clients without an `Origin` header (such as the relay bridges Claude Desktop starts) are accepted;
+- **the other Safari extensions you installed are trusted** — they share the `safari-web-extension://` scheme.
+
+`safari_javascript` executes arbitrary JavaScript in the active tab, and `safari_read_page` returns the full page HTML, by design. Treat them like browser DevTools — only use them on pages you trust.
+
+> **Updating from 1.2.x:** quit Claude Desktop completely (Cmd+Q) after pulling, so that no bridge from the previous version keeps listening on the port.
 
 ## Development
 
