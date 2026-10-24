@@ -11,10 +11,14 @@
  *   to the primary via a relay WebSocket connection on the same port.
  */
 
+const http = require('http');
 const { WebSocketServer, WebSocket } = require('ws');
 const readline = require('readline');
 
 const WS_PORT = 45678;
+// Loopback only — never reachable from the network. Both families are needed:
+// Safari resolves "localhost" to ::1 first, other clients may use 127.0.0.1.
+const LOOPBACK_HOSTS = ['::1', '127.0.0.1'];
 const MCP_VERSION = '2024-11-05';
 
 // ── Shared state ───────────────────────────────────────────────────────────
@@ -29,96 +33,133 @@ let isRelay = false;           // true when running as a relay instance
 // ── PRIMARY mode: WebSocket server ────────────────────────────────────────
 
 function startPrimary() {
-  const wss = new WebSocketServer({ port: WS_PORT });
+  const wss = new WebSocketServer({ noServer: true });
+  wss.on('connection', onConnection);
 
-  wss.on('error', (err) => {
-    if (err.code === 'EADDRINUSE') {
-      log(`Port ${WS_PORT} taken — starting as relay in 1 s...`);
-      setTimeout(startRelay, 1000);
-    } else {
-      log('WebSocket server error: ' + err.message);
+  const listening = [];
+  let remaining = LOOPBACK_HOSTS.length;
+  let portTaken = false;
+
+  // Called once per host, after it either listens or fails to.
+  // The primary role needs the port on every available loopback address:
+  // if any of them is taken, release the others and become a relay.
+  const settle = () => {
+    if (--remaining > 0) return;
+    if (portTaken || listening.length === 0) {
+      for (const server of listening) server.close();
+      if (portTaken) {
+        log(`Port ${WS_PORT} taken — starting as relay in 1 s...`);
+        setTimeout(startRelay, 1000);
+      } else {
+        log(`WebSocket server error: no loopback address available on port ${WS_PORT}`);
+      }
+      return;
+    }
+    const addresses = listening.map(s => {
+      const { address, family } = s.address();
+      return family === 'IPv6' ? `[${address}]:${WS_PORT}` : `${address}:${WS_PORT}`;
+    });
+    log(`PRIMARY — WebSocket server on ${addresses.join(' and ')} (loopback only)`);
+  };
+
+  for (const host of LOOPBACK_HOSTS) {
+    const server = http.createServer((req, res) => res.writeHead(426).end());
+    let started = false;
+
+    server.on('upgrade', (req, socket, head) => {
+      wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
+    });
+
+    server.on('error', (err) => {
+      if (started) { log('WebSocket server error: ' + err.message); return; }
+      started = true;
+      if (err.code === 'EADDRINUSE') portTaken = true;
+      else log(`Cannot listen on ${host}: ${err.message}`); // e.g. IPv6 disabled
+      settle();
+    });
+
+    server.listen(WS_PORT, host, () => {
+      started = true;
+      listening.push(server);
+      settle();
+    });
+  }
+}
+
+function onConnection(ws) {
+  let profileName = null;
+  let isRelayClient = false;
+
+  ws.on('message', (raw) => {
+    let msg;
+    try { msg = JSON.parse(raw.toString()); } catch { return; }
+
+    // ── Relay client handshake ──────────────────────────────────────────
+    if (msg.type === 'bridge_relay') {
+      isRelayClient = true;
+      log('Relay bridge connected');
+      return;
+    }
+
+    // ── Relay command forwarded from a secondary bridge ─────────────────
+    if (isRelayClient && msg.type === 'relay_cmd') {
+      const { id, command, params, profile } = msg;
+
+      if (command === 'list_profiles') {
+        const list = [...profiles.entries()].map(([name, s]) => ({
+          name, status: s.readyState === 1 ? 'connected' : 'disconnected'
+        }));
+        ws.send(JSON.stringify({ type: 'relay_result', id, success: true, result: list }));
+        return;
+      }
+
+      callExtension(command, params, profile || null)
+        .then(result => ws.send(JSON.stringify({ type: 'relay_result', id, success: true, result })))
+        .catch(err  => ws.send(JSON.stringify({ type: 'relay_result', id, success: false, error: err.message })));
+      return;
+    }
+
+    // ── Keepalive ping from extension ───────────────────────────────────
+    if (msg.type === 'ping') {
+      ws.send(JSON.stringify({ type: 'pong' }));
+      return;
+    }
+
+    // ── Safari extension registration ───────────────────────────────────
+    if (msg.type === 'connected') {
+      // Sanitise profile name: strip control characters, cap at 50 chars.
+      const raw = String(msg.profile || 'default');
+      profileName = raw.replace(/[\x00-\x1f\x7f]/g, '').slice(0, 50) || 'default';
+      profiles.has(profileName)
+        ? log(`Profile "${profileName}" reconnected`)
+        : log(`Profile "${profileName}" connected`);
+      profiles.set(profileName, ws);
+      return;
+    }
+
+    // ── Response to a pending command ───────────────────────────────────
+    const entry = pending.get(msg.id);
+    if (!entry) return;
+    pending.delete(msg.id);
+    if (msg.success) entry.resolve(msg.result);
+    else entry.reject(new Error(msg.error || 'Extension error'));
+  });
+
+  ws.on('close', () => {
+    if (isRelayClient) { log('Relay bridge disconnected'); return; }
+    if (profileName) {
+      log(`Profile "${profileName}" disconnected`);
+      if (profiles.get(profileName) === ws) profiles.delete(profileName);
+      for (const [id, entry] of pending) {
+        if (entry.profileName === profileName) {
+          pending.delete(id);
+          entry.reject(new Error(`Safari profile "${profileName}" disconnected`));
+        }
+      }
     }
   });
 
-  wss.on('listening', () => {
-    log(`PRIMARY — WebSocket server on ws://localhost:${WS_PORT}`);
-  });
-
-  wss.on('connection', (ws) => {
-    let profileName = null;
-    let isRelayClient = false;
-
-    ws.on('message', (raw) => {
-      let msg;
-      try { msg = JSON.parse(raw.toString()); } catch { return; }
-
-      // ── Relay client handshake ──────────────────────────────────────────
-      if (msg.type === 'bridge_relay') {
-        isRelayClient = true;
-        log('Relay bridge connected');
-        return;
-      }
-
-      // ── Relay command forwarded from a secondary bridge ─────────────────
-      if (isRelayClient && msg.type === 'relay_cmd') {
-        const { id, command, params, profile } = msg;
-
-        if (command === 'list_profiles') {
-          const list = [...profiles.entries()].map(([name, s]) => ({
-            name, status: s.readyState === 1 ? 'connected' : 'disconnected'
-          }));
-          ws.send(JSON.stringify({ type: 'relay_result', id, success: true, result: list }));
-          return;
-        }
-
-        callExtension(command, params, profile || null)
-          .then(result => ws.send(JSON.stringify({ type: 'relay_result', id, success: true, result })))
-          .catch(err  => ws.send(JSON.stringify({ type: 'relay_result', id, success: false, error: err.message })));
-        return;
-      }
-
-      // ── Keepalive ping from extension ───────────────────────────────────
-      if (msg.type === 'ping') {
-        ws.send(JSON.stringify({ type: 'pong' }));
-        return;
-      }
-
-      // ── Safari extension registration ───────────────────────────────────
-      if (msg.type === 'connected') {
-        // Sanitise profile name: strip control characters, cap at 50 chars.
-        const raw = String(msg.profile || 'default');
-        profileName = raw.replace(/[\x00-\x1f\x7f]/g, '').slice(0, 50) || 'default';
-        profiles.has(profileName)
-          ? log(`Profile "${profileName}" reconnected`)
-          : log(`Profile "${profileName}" connected`);
-        profiles.set(profileName, ws);
-        return;
-      }
-
-      // ── Response to a pending command ───────────────────────────────────
-      const entry = pending.get(msg.id);
-      if (!entry) return;
-      pending.delete(msg.id);
-      if (msg.success) entry.resolve(msg.result);
-      else entry.reject(new Error(msg.error || 'Extension error'));
-    });
-
-    ws.on('close', () => {
-      if (isRelayClient) { log('Relay bridge disconnected'); return; }
-      if (profileName) {
-        log(`Profile "${profileName}" disconnected`);
-        if (profiles.get(profileName) === ws) profiles.delete(profileName);
-        for (const [id, entry] of pending) {
-          if (entry.profileName === profileName) {
-            pending.delete(id);
-            entry.reject(new Error(`Safari profile "${profileName}" disconnected`));
-          }
-        }
-      }
-    });
-
-    ws.on('error', (err) => log('Client WebSocket error: ' + err.message));
-  });
+  ws.on('error', (err) => log('Client WebSocket error: ' + err.message));
 }
 
 // ── RELAY mode: connect to the primary bridge ──────────────────────────────
