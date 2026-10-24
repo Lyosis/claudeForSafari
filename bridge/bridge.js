@@ -307,10 +307,16 @@ function callExtension(command, params = {}, profileParam = null) {
 
 // ── MCP Tool definitions ───────────────────────────────────────────────────
 
+// Safari profile used when a tool call names none, set per client in its MCP
+// config (e.g. "Dev", a profile dedicated to Claude). Unset → previous behaviour.
+const DEFAULT_PROFILE = clean(process.env.SAFARI_DEFAULT_PROFILE ?? '', 50) || null;
+
 const PROFILE_PROP = {
   profile: {
     type: 'string',
-    description: 'Safari profile name (e.g. "Perso", "Pro"). Omit to use the first connected profile.'
+    description: DEFAULT_PROFILE
+      ? `Safari profile name (e.g. "Perso", "Pro"). Omit to use "${DEFAULT_PROFILE}" (configured default).`
+      : 'Safari profile name (e.g. "Perso", "Pro"). Omit to use the first connected profile.'
   }
 };
 
@@ -522,6 +528,9 @@ rl.on('line', async (line) => {
           } else {
             list = listProfiles();
           }
+          if (DEFAULT_PROFILE && Array.isArray(list)) {
+            list = list.map(p => ({ ...p, default: p.name === DEFAULT_PROFILE }));
+          }
           result = {
             content: [{
               type: 'text',
@@ -536,7 +545,24 @@ rl.on('line', async (line) => {
         const cmd = TOOL_TO_CMD[toolName];
         if (!cmd) throw mcpError(-32602, `Unknown tool: ${toolName}`);
 
-        const data = await callExtension(cmd, toolArgs, profile || null);
+        // The default is resolved here, before any relay: each client's own
+        // configuration applies, never the primary's. No silent fallback to
+        // another profile when the default one is not connected.
+        const target = profile || DEFAULT_PROFILE || null;
+        let data;
+        try {
+          data = await callExtension(cmd, toolArgs, target);
+        } catch (err) {
+          // Same message format in 1.3.0 primaries, so this also works through an older relay target.
+          if (!profile && DEFAULT_PROFILE && err.message?.startsWith(`Profile "${DEFAULT_PROFILE}" not connected`)) {
+            throw new Error(
+              `Default profile "${DEFAULT_PROFILE}" (SAFARI_DEFAULT_PROFILE) is not connected. ` +
+              `${err.message.split('. ').slice(1).join('. ')}. ` +
+              `Open a Safari window in that profile, or pass "profile" explicitly.`
+            );
+          }
+          throw err;
+        }
         result = {
           content: [{
             type: 'text',
