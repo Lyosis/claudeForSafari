@@ -48,7 +48,7 @@ claudeForSafari/                  ← git root
 
 ## Requirements
 
-- macOS 14+ (Sonoma or later)
+- macOS 13+ (Ventura or later)
 - Xcode 16+
 - Node.js v18+ — [nodejs.org](https://nodejs.org) if not yet installed
 - An Apple developer account (free account is enough for local use)
