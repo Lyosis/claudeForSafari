@@ -19,6 +19,11 @@ const WS_PORT = 45678;
 // Loopback only — never reachable from the network. Both families are needed:
 // Safari resolves "localhost" to ::1 first, other clients may use 127.0.0.1.
 const LOOPBACK_HOSTS = ['::1', '127.0.0.1'];
+// Browsers always send Origin on a WebSocket handshake and pages cannot forge it,
+// so any Origin other than a Safari extension's is a web page and is refused.
+// Clients without Origin are local processes (relay bridges) — trusted, see README.
+// The extension UUID is random per install: match the scheme, case-insensitively.
+const EXTENSION_ORIGIN = /^safari-web-extension:\/\//i;
 const MCP_VERSION = '2024-11-05';
 
 // ── Shared state ───────────────────────────────────────────────────────────
@@ -67,6 +72,13 @@ function startPrimary() {
     let started = false;
 
     server.on('upgrade', (req, socket, head) => {
+      const { origin } = req.headers;
+      if (origin !== undefined && !EXTENSION_ORIGIN.test(origin)) {
+        log(`Refused connection from origin "${clean(origin, 100)}"`);
+        socket.on('error', () => {});
+        socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+        return;
+      }
       wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
     });
 
@@ -86,7 +98,8 @@ function startPrimary() {
   }
 }
 
-function onConnection(ws) {
+function onConnection(ws, req) {
+  const origin = req.headers.origin;
   let profileName = null;
   let isRelayClient = false;
 
@@ -127,12 +140,11 @@ function onConnection(ws) {
 
     // ── Safari extension registration ───────────────────────────────────
     if (msg.type === 'connected') {
-      // Sanitise profile name: strip control characters, cap at 50 chars.
-      const raw = String(msg.profile || 'default');
-      profileName = raw.replace(/[\x00-\x1f\x7f]/g, '').slice(0, 50) || 'default';
+      profileName = clean(msg.profile || 'default', 50) || 'default';
+      const via = origin === undefined ? 'no origin' : `origin ${clean(origin, 100)}`;
       profiles.has(profileName)
-        ? log(`Profile "${profileName}" reconnected`)
-        : log(`Profile "${profileName}" connected`);
+        ? log(`Profile "${profileName}" reconnected (${via})`)
+        : log(`Profile "${profileName}" connected (${via})`);
       profiles.set(profileName, ws);
       return;
     }
@@ -536,4 +548,6 @@ function mcpError(code, message) {
   const e = new Error(message); e.code = code; return e;
 }
 function write(obj) { process.stdout.write(JSON.stringify(obj) + '\n'); }
+// Untrusted strings going to the log: strip control characters, cap the length.
+function clean(value, max) { return String(value).replace(/[\x00-\x1f\x7f]/g, '').slice(0, max); }
 function log(msg)   { process.stderr.write('[claude-safari] ' + msg + '\n'); }
