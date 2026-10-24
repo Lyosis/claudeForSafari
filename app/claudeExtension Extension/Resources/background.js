@@ -9,9 +9,12 @@
 const BRIDGE_WS = 'ws://localhost:45678';
 const RECONNECT_DELAY = 3000; // ms
 
+const STORAGE_TIMEOUT = 1000; // ms
+
 let ws = null;
 let reconnectTimer = null;
 let currentProfile = 'default';
+let profileKnown = false;     // connect() waits for the stored profile name
 
 // ── Keepalive + auto-reconnect ───────────────────────────────────────────────
 // Safari suspends the background page when idle, which freezes setInterval and
@@ -38,18 +41,27 @@ if (browser.alarms) {
   }, 25000);
 }
 
-// Connect immediately with the default profile name,
-// then switch to the stored name if one exists.
-// This avoids blocking on storage (which may fail on first run).
-connect();
+// Connect only once the stored profile name is known: registering first as
+// "default" would let this instance briefly receive another profile's commands.
+// Storage may fail or hang on first run — fall back to "default" after a short wait.
+const storedProfile = browser.storage.local.get('profileName')
+  .then(({ profileName } = {}) => profileName, () => undefined);
 
-browser.storage.local.get('profileName').then(({ profileName }) => {
+Promise.race([
+  storedProfile,
+  new Promise(resolve => setTimeout(resolve, STORAGE_TIMEOUT))
+]).then((profileName) => {
+  if (profileName) currentProfile = profileName;
+  profileKnown = true;
+  connect();
+});
+
+// Storage answered after the timeout: reconnect under the stored name.
+storedProfile.then((profileName) => {
   if (profileName && profileName !== currentProfile) {
     currentProfile = profileName;
-    if (ws) ws.close(); // reconnect with the correct name
+    if (ws) ws.close();
   }
-}).catch(() => {
-  // storage not available yet — keep default name, no-op
 });
 
 // React to profile name changes from the popup (reconnect with new name)
@@ -70,6 +82,7 @@ browser.tabs.onUpdated.addListener(() => connect());
 // ── WebSocket connection ───────────────────────────────────────────────────
 
 function connect() {
+  if (!profileKnown) return;
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
 
   ws = new WebSocket(BRIDGE_WS);
