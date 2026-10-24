@@ -12,6 +12,7 @@
  */
 
 const http = require('http');
+const crypto = require('crypto');
 const { WebSocketServer, WebSocket } = require('ws');
 const readline = require('readline');
 
@@ -27,9 +28,10 @@ const EXTENSION_ORIGIN = /^safari-web-extension:\/\//i;
 const MCP_VERSION = '2024-11-05';
 
 // ── Shared state ───────────────────────────────────────────────────────────
-const profiles = new Map();    // profileName → WebSocket (primary only)
-let cmdIdCounter = 0;
-const pending = new Map();     // id → { resolve, reject }
+// profileName → sockets registered under that name, most recent last (primary only).
+// Commands go to the most recent open one; when it closes, the previous one takes over.
+const profiles = new Map();
+const pending = new Map();     // id → { ws, resolve, reject } — ws: socket the command was sent to
 
 // ── Relay state (used when this instance is NOT the primary) ───────────────
 let relayWs = null;            // WebSocket connection to the primary bridge
@@ -119,10 +121,7 @@ function onConnection(ws, req) {
       const { id, command, params, profile } = msg;
 
       if (command === 'list_profiles') {
-        const list = [...profiles.entries()].map(([name, s]) => ({
-          name, status: s.readyState === 1 ? 'connected' : 'disconnected'
-        }));
-        ws.send(JSON.stringify({ type: 'relay_result', id, success: true, result: list }));
+        ws.send(JSON.stringify({ type: 'relay_result', id, success: true, result: listProfiles() }));
         return;
       }
 
@@ -140,18 +139,20 @@ function onConnection(ws, req) {
 
     // ── Safari extension registration ───────────────────────────────────
     if (msg.type === 'connected') {
+      if (profileName) unregister(profileName, ws);
       profileName = clean(msg.profile || 'default', 50) || 'default';
       const via = origin === undefined ? 'no origin' : `origin ${clean(origin, 100)}`;
       profiles.has(profileName)
         ? log(`Profile "${profileName}" reconnected (${via})`)
         : log(`Profile "${profileName}" connected (${via})`);
-      profiles.set(profileName, ws);
+      profiles.set(profileName, [...(profiles.get(profileName) ?? []), ws]);
       return;
     }
 
     // ── Response to a pending command ───────────────────────────────────
+    // Only the socket the command was sent to may answer it.
     const entry = pending.get(msg.id);
-    if (!entry) return;
+    if (!entry || entry.ws !== ws) return;
     pending.delete(msg.id);
     if (msg.success) entry.resolve(msg.result);
     else entry.reject(new Error(msg.error || 'Extension error'));
@@ -160,18 +161,36 @@ function onConnection(ws, req) {
   ws.on('close', () => {
     if (isRelayClient) { log('Relay bridge disconnected'); return; }
     if (profileName) {
-      log(`Profile "${profileName}" disconnected`);
-      if (profiles.get(profileName) === ws) profiles.delete(profileName);
-      for (const [id, entry] of pending) {
-        if (entry.profileName === profileName) {
-          pending.delete(id);
-          entry.reject(new Error(`Safari profile "${profileName}" disconnected`));
-        }
+      unregister(profileName, ws);
+      const left = profiles.get(profileName)?.length ?? 0;
+      log(left
+        ? `Profile "${profileName}" socket closed — ${left} other socket(s) still registered`
+        : `Profile "${profileName}" disconnected`);
+    }
+    for (const [id, entry] of pending) {
+      if (entry.ws === ws) {
+        pending.delete(id);
+        entry.reject(new Error(`Safari profile "${profileName}" disconnected`));
       }
     }
   });
 
   ws.on('error', (err) => log('Client WebSocket error: ' + err.message));
+}
+
+function unregister(name, ws) {
+  const rest = (profiles.get(name) ?? []).filter(s => s !== ws);
+  rest.length ? profiles.set(name, rest) : profiles.delete(name);
+}
+
+function activeSocket(name) {
+  return (profiles.get(name) ?? []).findLast(s => s.readyState === WebSocket.OPEN) ?? null;
+}
+
+function listProfiles() {
+  return [...profiles.keys()].map(name => ({
+    name, status: activeSocket(name) ? 'connected' : 'disconnected'
+  }));
 }
 
 // ── RELAY mode: connect to the primary bridge ──────────────────────────────
@@ -229,15 +248,14 @@ function resolveWs(profileParam) {
     );
   }
   if (profileParam) {
-    const ws = profiles.get(profileParam);
-    if (!ws) {
+    if (!profiles.has(profileParam)) {
       const available = [...profiles.keys()].join(', ');
       throw new Error(`Profile "${profileParam}" not connected. Available: ${available}`);
     }
-    return { ws, profileName: profileParam };
+    return { ws: activeSocket(profileParam), profileName: profileParam };
   }
-  const [name, ws] = [...profiles.entries()][0];
-  return { ws, profileName: name };
+  const [name] = profiles.keys();
+  return { ws: activeSocket(name), profileName: name };
 }
 
 function callExtension(command, params = {}, profileParam = null) {
@@ -247,7 +265,7 @@ function callExtension(command, params = {}, profileParam = null) {
       if (!relayWs || relayWs.readyState !== WebSocket.OPEN) {
         return reject(new Error('Relay not connected to primary bridge'));
       }
-      const id = `relay_${++cmdIdCounter}`;
+      const id = `relay_${crypto.randomUUID()}`;
       const timeout = setTimeout(() => {
         pending.delete(id);
         reject(new Error(`Relay command "${command}" timed out`));
@@ -266,18 +284,19 @@ function callExtension(command, params = {}, profileParam = null) {
     try { resolved = resolveWs(profileParam); } catch (e) { return reject(e); }
     const { ws, profileName } = resolved;
 
-    if (ws.readyState !== WebSocket.OPEN) {
+    if (!ws) {
       return reject(new Error(`Profile "${profileName}" WebSocket is not open`));
     }
 
-    const id = `cmd_${++cmdIdCounter}`;
+    // Unguessable, so another client cannot answer in the extension's place.
+    const id = `cmd_${crypto.randomUUID()}`;
     const timeout = setTimeout(() => {
       pending.delete(id);
       reject(new Error(`Command "${command}" timed out after 30 s`));
     }, 30_000);
 
     pending.set(id, {
-      profileName,
+      ws,
       resolve: (v) => { clearTimeout(timeout); resolve(v); },
       reject:  (e) => { clearTimeout(timeout); reject(e); }
     });
@@ -501,9 +520,7 @@ rl.on('line', async (line) => {
             // Ask primary for the profile list via relay
             list = await callExtension('list_profiles', {}, null);
           } else {
-            list = [...profiles.entries()].map(([name, ws]) => ({
-              name, status: ws.readyState === WebSocket.OPEN ? 'connected' : 'disconnected'
-            }));
+            list = listProfiles();
           }
           result = {
             content: [{
