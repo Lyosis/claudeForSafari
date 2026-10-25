@@ -37,6 +37,29 @@ const pending = new Map();     // id → { ws, resolve, reject } — ws: socket 
 let relayWs = null;            // WebSocket connection to the primary bridge
 let isRelay = false;           // true when running as a relay instance
 
+// ── Role readiness ─────────────────────────────────────────────────────────
+// Until this instance listens as primary or is connected as a relay, tool calls
+// wait for it instead of failing: hosts start the server on demand (and restart
+// it after an error) and send the call at once, inside the ~1 s relay startup.
+const ROLE_TIMEOUT = 5000; // ms — then the usual "not connected" errors apply
+let roleReady = false;
+let roleWaiters = [];
+
+function setRoleReady(ready) {
+  roleReady = ready;
+  if (!ready) return;
+  for (const wake of roleWaiters) wake();
+  roleWaiters = [];
+}
+
+function waitForRole() {
+  if (roleReady) return Promise.resolve();
+  return new Promise(resolve => {
+    const timer = setTimeout(resolve, ROLE_TIMEOUT);
+    roleWaiters.push(() => { clearTimeout(timer); resolve(); });
+  });
+}
+
 // ── PRIMARY mode: WebSocket server ────────────────────────────────────────
 
 function startPrimary() {
@@ -67,6 +90,7 @@ function startPrimary() {
       return family === 'IPv6' ? `[${address}]:${WS_PORT}` : `${address}:${WS_PORT}`;
     });
     log(`PRIMARY — WebSocket server on ${addresses.join(' and ')} (loopback only)`);
+    setRoleReady(true);
   };
 
   for (const host of LOOPBACK_HOSTS) {
@@ -202,6 +226,7 @@ function startRelay() {
     isRelay = true;
     relayWs.send(JSON.stringify({ type: 'bridge_relay' }));
     log('RELAY — connected to primary bridge');
+    setRoleReady(true); // after the handshake, so waiting calls follow it
   });
 
   relayWs.on('message', (raw) => {
@@ -220,6 +245,7 @@ function startRelay() {
     log('Relay connection lost — retrying as primary in 3 s...');
     isRelay = false;
     relayWs = null;
+    setRoleReady(false);
     // Reject any commands that were waiting on the primary's response.
     for (const [id, entry] of pending) {
       if (id.startsWith('relay_')) {
@@ -519,6 +545,7 @@ rl.on('line', async (line) => {
       case 'tools/call': {
         const toolName = params?.name;
         const { profile, ...toolArgs } = params?.arguments ?? {};
+        await waitForRole();
 
         if (toolName === 'safari_list_profiles') {
           let list;
