@@ -274,14 +274,28 @@ function resolveWs(profileParam) {
     );
   }
   if (profileParam) {
-    if (!profiles.has(profileParam)) {
+    const name = matchProfile(profileParam);
+    if (!name) {
       const available = [...profiles.keys()].join(', ');
       throw new Error(`Profile "${profileParam}" not connected. Available: ${available}`);
     }
-    return { ws: activeSocket(profileParam), profileName: profileParam };
+    return { ws: activeSocket(name), profileName: name };
   }
   const [name] = profiles.keys();
   return { ws: activeSocket(name), profileName: name };
+}
+
+// Profile names are typed by hand in the popup: compare them case-insensitively
+// ("dev" matches "Dev"). An exact match wins; several case variants without one
+// are refused rather than picked at random.
+function matchProfile(name) {
+  if (profiles.has(name)) return name;
+  const lower = name.toLowerCase();
+  const found = [...profiles.keys()].filter(k => k.toLowerCase() === lower);
+  if (found.length > 1) {
+    throw new Error(`Profile "${name}" is ambiguous: ${found.map(k => `"${k}"`).join(', ')} are connected. Pass the exact name.`);
+  }
+  return found[0] ?? null;
 }
 
 function callExtension(command, params = {}, profileParam = null) {
@@ -556,7 +570,7 @@ rl.on('line', async (line) => {
             list = listProfiles();
           }
           if (DEFAULT_PROFILE && Array.isArray(list)) {
-            list = list.map(p => ({ ...p, default: p.name === DEFAULT_PROFILE }));
+            list = list.map(p => ({ ...p, default: p.name.toLowerCase() === DEFAULT_PROFILE.toLowerCase() }));
           }
           result = {
             content: [{
