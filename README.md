@@ -36,7 +36,6 @@ claudeForSafari/                  ← git root
         └── Resources/            ← SINGLE SOURCE for extension files
             ├── manifest.json
             ├── background.js
-            ├── content.js
             ├── popup.html / popup.js / popup.css
             ├── images/
             └── _locales/

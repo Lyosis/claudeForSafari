@@ -22,35 +22,29 @@ class ViewController: NSViewController, WKNavigationDelegate, WKScriptMessageHan
 
         self.webView.configuration.userContentController.add(self, name: "controller")
 
-        self.webView.loadFileURL(Bundle.main.url(forResource: "Main", withExtension: "html")!, allowingReadAccessTo: Bundle.main.resourceURL!)
+        guard let page = Bundle.main.url(forResource: "Main", withExtension: "html"),
+              let resources = Bundle.main.resourceURL else { return }
+        self.webView.loadFileURL(page, allowingReadAccessTo: resources)
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        SFSafariExtensionManager.getStateOfSafariExtension(withIdentifier: extensionBundleIdentifier) { (state, error) in
-            guard let state = state, error == nil else {
+        // Runs on the main actor, like the view controller: no dispatch needed.
+        Task {
+            guard let state = try? await SFSafariExtensionManager.stateOfSafariExtension(withIdentifier: extensionBundleIdentifier) else {
                 // Insert code to inform the user that something went wrong.
                 return
             }
-
-            DispatchQueue.main.async {
-                if #available(macOS 13, *) {
-                    webView.evaluateJavaScript("show(\(state.isEnabled), true)")
-                } else {
-                    webView.evaluateJavaScript("show(\(state.isEnabled), false)")
-                }
-            }
+            // macOS 13 and later (the deployment target) call it "Safari Settings".
+            _ = try? await webView.evaluateJavaScript("show(\(state.isEnabled), true)")
         }
     }
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        if (message.body as! String != "open-preferences") {
-            return;
-        }
+        guard message.body as? String == "open-preferences" else { return }
 
-        SFSafariApplication.showPreferencesForExtension(withIdentifier: extensionBundleIdentifier) { error in
-            DispatchQueue.main.async {
-                NSApplication.shared.terminate(nil)
-            }
+        Task {
+            try? await SFSafariApplication.showPreferencesForExtension(withIdentifier: extensionBundleIdentifier)
+            NSApplication.shared.terminate(nil)
         }
     }
 
