@@ -174,9 +174,10 @@ When that profile is not connected, tools fail with an explicit error instead of
 ## Troubleshooting
 
 **"Safari extension not connected"**
-- Is Safari open? Is the extension checked in Safari → Extensions?
+- Is Safari open? Is the extension checked in Safari → Extensions — and, with Safari profiles, in Settings → Profiles → *your profile* → Extensions?
 - Check the bridge is running: `ps aux | grep bridge.js`
-- Check logs: Console.app → filter by `claude-safari`
+- Bridge log (written by Claude Desktop): `~/Library/Logs/Claude/mcp-server-safari.log` — every line starts with `[claude-safari]`; refused connections and profile registrations are logged there.
+- Extension log: Safari → Develop → *Web Extension Background Content* → Claude for Safari (enable the Develop menu in Settings → Advanced).
 
 **Permission denied on script injection**  
 → Safari → Settings → Extensions → claudeExtension → **Allow on all websites**
