@@ -52,6 +52,27 @@ function setRoleReady(ready) {
   roleWaiters = [];
 }
 
+// A new primary has no extension yet: they reconnect within 3 s of losing the
+// previous one. Calls made right after becoming primary wait for them.
+const EXTENSION_GRACE = 5000; // ms after becoming primary
+let primarySince = 0;         // 0 = never primary → no wait
+let registrationWaiters = [];
+
+async function waitForExtension(profileParam) {
+  const present = () => {
+    try { return profileParam ? matchProfile(profileParam) !== null : profiles.size > 0; }
+    catch { return true; } // ambiguous: resolveWs reports it
+  };
+  while (!present()) {
+    const left = primarySince + EXTENSION_GRACE - Date.now();
+    if (left <= 0) return;
+    await new Promise(resolve => {
+      const timer = setTimeout(resolve, left);
+      registrationWaiters.push(() => { clearTimeout(timer); resolve(); });
+    });
+  }
+}
+
 function waitForRole() {
   if (roleReady) return Promise.resolve();
   return new Promise(resolve => {
@@ -90,6 +111,7 @@ function startPrimary() {
       return family === 'IPv6' ? `[${address}]:${WS_PORT}` : `${address}:${WS_PORT}`;
     });
     log(`PRIMARY — WebSocket server on ${addresses.join(' and ')} (loopback only)`);
+    primarySince = Date.now();
     setRoleReady(true);
   };
 
@@ -145,7 +167,8 @@ function onConnection(ws, req) {
       const { id, command, params, profile } = msg;
 
       if (command === 'list_profiles') {
-        ws.send(JSON.stringify({ type: 'relay_result', id, success: true, result: listProfiles() }));
+        waitForExtension(null).then(() =>
+          ws.send(JSON.stringify({ type: 'relay_result', id, success: true, result: listProfiles() })));
         return;
       }
 
@@ -170,6 +193,8 @@ function onConnection(ws, req) {
         ? log(`Profile "${profileName}" reconnected (${via})`)
         : log(`Profile "${profileName}" connected (${via})`);
       profiles.set(profileName, [...(profiles.get(profileName) ?? []), ws]);
+      for (const wake of registrationWaiters) wake();
+      registrationWaiters = [];
       return;
     }
 
@@ -319,7 +344,7 @@ function callExtension(command, params = {}, profileParam = null) {
   }
 
   // ── Primary mode: send directly to extension ─────────────────────────────
-  return new Promise((resolve, reject) => {
+  return waitForExtension(profileParam).then(() => new Promise((resolve, reject) => {
     let resolved;
     try { resolved = resolveWs(profileParam); } catch (e) { return reject(e); }
     const { ws, profileName } = resolved;
@@ -342,7 +367,7 @@ function callExtension(command, params = {}, profileParam = null) {
     });
 
     ws.send(JSON.stringify({ id, command, params }));
-  });
+  }));
 }
 
 // ── MCP Tool definitions ───────────────────────────────────────────────────
@@ -567,6 +592,7 @@ rl.on('line', async (line) => {
             // Ask primary for the profile list via relay
             list = await callExtension('list_profiles', {}, null);
           } else {
+            await waitForExtension(null);
             list = listProfiles();
           }
           if (DEFAULT_PROFILE && Array.isArray(list)) {
