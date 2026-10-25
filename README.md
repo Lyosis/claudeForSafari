@@ -49,7 +49,7 @@ claudeForSafari/                  ← git root
 
 - macOS 13+ (Ventura or later)
 - Xcode 16+
-- Node.js v18+ — [nodejs.org](https://nodejs.org) if not yet installed
+- Node.js v20+ — [nodejs.org](https://nodejs.org) if not yet installed
 - An Apple developer account (free account is enough for local use)
 - Claude Desktop with MCP support
 
@@ -186,7 +186,7 @@ When that profile is not connected, tools fail with an explicit error instead of
 → Internal Safari pages (`favorites://`, `about:blank`, etc.) cannot be injected. Navigate to an `http://` or `https://` URL first.
 
 **Bridge won't start**  
-→ Check Node.js: `node -v` (v18+ required)  
+→ Check Node.js: `node -v` (v20+ required)  
 → Use the absolute path to `node` in `claude_desktop_config.json`
 
 **Xcode — "No signing certificate"**  
@@ -224,10 +224,29 @@ app/claudeExtension Extension/Resources/
 After editing `background.js` or `manifest.json`:
 
 1. Rebuild in Xcode (Cmd+R)
-2. Safari → Settings → Extensions → disable then re-enable the extension  
-   *(or restart Safari)*
+2. Quit Safari (Cmd+Q) and reopen it — disabling and re-enabling the extension in Settings only reloads it in the current profile.
+
+Build from a single checkout: building the project from a second folder (another clone, a worktree, `xcodebuild -derivedDataPath …`) registers a second copy of the extension, which Safari then loads alongside the first. `pluginkit -mAvvv -i com.wilfrid.B.claudeExtension.Extension` lists the registered copies.
 
 The bridge (`bridge/bridge.js`) does not need a rebuild — Node.js picks up changes on the next Claude Desktop restart.
+
+### Tests
+
+```bash
+cd bridge
+npm ci
+npm test
+```
+
+The tests run copies of the bridge on their own ports (never on 45678, so Claude Desktop can keep running) and `background.js` in a sandbox with fake browser APIs. They take about 30 seconds: they exercise the real reconnect and grace delays. The network test is skipped, with the reason shown, when the machine has no LAN address the test can reach. GitHub Actions runs them on every pull request.
+
+What only a real Safari can check — after rebuilding the extension and restarting Safari:
+
+1. **Version** — in a test tab, `safari_javascript` with `return browser.runtime.getManifest().version` returns the version you built.
+2. **Origin** — the bridge log (`~/Library/Logs/Claude/mcp-server-safari.log`) shows `Profile "…" connected (origin safari-web-extension://…)`.
+3. **Tools** — `safari_tabs_create`, `safari_find`, `safari_click`, `safari_form_input`, `safari_scroll`, `safari_tabs_close` on a page with a form; check the effects in the page itself.
+4. **Web pages refused** — a page served over plain `http` that opens `ws://localhost:45678` gets an error, and the bridge log shows `Refused connection from origin "http://…"`.
+5. **Host app** — opening `claudeExtension.app` shows the extension's state; its button quits the app and opens Safari Settings.
 
 ---
 
