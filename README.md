@@ -134,7 +134,7 @@ The extension reconnects automatically to the bridge after sleep or after visiti
 
 ### Safari profiles
 
-Each Safari profile runs its own copy of the extension. Give each one a name from the extension's toolbar popup (**Profile name**); unnamed profiles all register as `default`, and Claude then cannot tell them apart.
+Each Safari profile runs its own copy of the extension. Give each one a name from the extension's toolbar popup (**Profile name**); unnamed profiles all register as `default`, and Claude then cannot tell them apart. Names are matched case-insensitively (`dev` matches `Dev`).
 
 Every tool accepts a `profile` argument. To make Claude use one profile when it names none — recommended: a profile **dedicated to Claude**, so that it never browses with the sessions and cookies of your personal profiles — set `SAFARI_DEFAULT_PROFILE` in the server entry:
 
