@@ -220,10 +220,14 @@ async function cmdFind({ selector, text, limit = 20, tabId: tId }) {
       ? Array.from(document.querySelectorAll(sel))
       : Array.from(document.querySelectorAll('a,button,input,select,textarea,h1,h2,h3,p,[role]'));
 
+    // Never hand a typed password to Claude, not even through the text filter
+    // (matching against it would let a caller guess it character by character).
+    const isSecret = e => e.type === 'password';
+
     if (txt) {
       const lower = txt.toLowerCase();
       els = els.filter(e => e.textContent.toLowerCase().includes(lower)
-                         || (e.value && String(e.value).toLowerCase().includes(lower)));
+                         || (!isSecret(e) && e.value && String(e.value).toLowerCase().includes(lower)));
     }
 
     return els.slice(0, lim).map(e => {
@@ -233,7 +237,7 @@ async function cmdFind({ selector, text, limit = 20, tabId: tId }) {
         id:      e.id || null,
         classes: e.className || null,
         text:    e.textContent.trim().slice(0, 120),
-        value:   e.value ?? null,
+        value:   isSecret(e) ? (e.value ? '<redacted>' : null) : (e.value ?? null),
         href:    e.href  ?? null,
         type:    e.type  ?? null,
         rect: { top: Math.round(r.top), left: Math.round(r.left),
