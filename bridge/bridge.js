@@ -37,6 +37,50 @@ const pending = new Map();     // id → { ws, resolve, reject } — ws: socket 
 let relayWs = null;            // WebSocket connection to the primary bridge
 let isRelay = false;           // true when running as a relay instance
 
+// ── Role readiness ─────────────────────────────────────────────────────────
+// Until this instance listens as primary or is connected as a relay, tool calls
+// wait for it instead of failing: hosts start the server on demand (and restart
+// it after an error) and send the call at once, inside the ~1 s relay startup.
+const ROLE_TIMEOUT = 5000; // ms — then the usual "not connected" errors apply
+let roleReady = false;
+let roleWaiters = [];
+
+function setRoleReady(ready) {
+  roleReady = ready;
+  if (!ready) return;
+  for (const wake of roleWaiters) wake();
+  roleWaiters = [];
+}
+
+// A new primary has no extension yet: they reconnect within 3 s of losing the
+// previous one. Calls made right after becoming primary wait for them.
+const EXTENSION_GRACE = 5000; // ms after becoming primary
+let primarySince = 0;         // 0 = never primary → no wait
+let registrationWaiters = [];
+
+async function waitForExtension(profileParam) {
+  const present = () => {
+    try { return profileParam ? matchProfile(profileParam) !== null : profiles.size > 0; }
+    catch { return true; } // ambiguous: resolveWs reports it
+  };
+  while (!present()) {
+    const left = primarySince + EXTENSION_GRACE - Date.now();
+    if (left <= 0) return;
+    await new Promise(resolve => {
+      const timer = setTimeout(resolve, left);
+      registrationWaiters.push(() => { clearTimeout(timer); resolve(); });
+    });
+  }
+}
+
+function waitForRole() {
+  if (roleReady) return Promise.resolve();
+  return new Promise(resolve => {
+    const timer = setTimeout(resolve, ROLE_TIMEOUT);
+    roleWaiters.push(() => { clearTimeout(timer); resolve(); });
+  });
+}
+
 // ── PRIMARY mode: WebSocket server ────────────────────────────────────────
 
 function startPrimary() {
@@ -67,6 +111,8 @@ function startPrimary() {
       return family === 'IPv6' ? `[${address}]:${WS_PORT}` : `${address}:${WS_PORT}`;
     });
     log(`PRIMARY — WebSocket server on ${addresses.join(' and ')} (loopback only)`);
+    primarySince = Date.now();
+    setRoleReady(true);
   };
 
   for (const host of LOOPBACK_HOSTS) {
@@ -121,7 +167,8 @@ function onConnection(ws, req) {
       const { id, command, params, profile } = msg;
 
       if (command === 'list_profiles') {
-        ws.send(JSON.stringify({ type: 'relay_result', id, success: true, result: listProfiles() }));
+        waitForExtension(null).then(() =>
+          ws.send(JSON.stringify({ type: 'relay_result', id, success: true, result: listProfiles() })));
         return;
       }
 
@@ -146,6 +193,8 @@ function onConnection(ws, req) {
         ? log(`Profile "${profileName}" reconnected (${via})`)
         : log(`Profile "${profileName}" connected (${via})`);
       profiles.set(profileName, [...(profiles.get(profileName) ?? []), ws]);
+      for (const wake of registrationWaiters) wake();
+      registrationWaiters = [];
       return;
     }
 
@@ -202,6 +251,7 @@ function startRelay() {
     isRelay = true;
     relayWs.send(JSON.stringify({ type: 'bridge_relay' }));
     log('RELAY — connected to primary bridge');
+    setRoleReady(true); // after the handshake, so waiting calls follow it
   });
 
   relayWs.on('message', (raw) => {
@@ -220,6 +270,7 @@ function startRelay() {
     log('Relay connection lost — retrying as primary in 3 s...');
     isRelay = false;
     relayWs = null;
+    setRoleReady(false);
     // Reject any commands that were waiting on the primary's response.
     for (const [id, entry] of pending) {
       if (id.startsWith('relay_')) {
@@ -248,14 +299,28 @@ function resolveWs(profileParam) {
     );
   }
   if (profileParam) {
-    if (!profiles.has(profileParam)) {
+    const name = matchProfile(profileParam);
+    if (!name) {
       const available = [...profiles.keys()].join(', ');
       throw new Error(`Profile "${profileParam}" not connected. Available: ${available}`);
     }
-    return { ws: activeSocket(profileParam), profileName: profileParam };
+    return { ws: activeSocket(name), profileName: name };
   }
   const [name] = profiles.keys();
   return { ws: activeSocket(name), profileName: name };
+}
+
+// Profile names are typed by hand in the popup: compare them case-insensitively
+// ("dev" matches "Dev"). An exact match wins; several case variants without one
+// are refused rather than picked at random.
+function matchProfile(name) {
+  if (profiles.has(name)) return name;
+  const lower = name.toLowerCase();
+  const found = [...profiles.keys()].filter(k => k.toLowerCase() === lower);
+  if (found.length > 1) {
+    throw new Error(`Profile "${name}" is ambiguous: ${found.map(k => `"${k}"`).join(', ')} are connected. Pass the exact name.`);
+  }
+  return found[0] ?? null;
 }
 
 function callExtension(command, params = {}, profileParam = null) {
@@ -279,7 +344,7 @@ function callExtension(command, params = {}, profileParam = null) {
   }
 
   // ── Primary mode: send directly to extension ─────────────────────────────
-  return new Promise((resolve, reject) => {
+  return waitForExtension(profileParam).then(() => new Promise((resolve, reject) => {
     let resolved;
     try { resolved = resolveWs(profileParam); } catch (e) { return reject(e); }
     const { ws, profileName } = resolved;
@@ -302,15 +367,21 @@ function callExtension(command, params = {}, profileParam = null) {
     });
 
     ws.send(JSON.stringify({ id, command, params }));
-  });
+  }));
 }
 
 // ── MCP Tool definitions ───────────────────────────────────────────────────
 
+// Safari profile used when a tool call names none, set per client in its MCP
+// config (e.g. "Dev", a profile dedicated to Claude). Unset → previous behaviour.
+const DEFAULT_PROFILE = clean(process.env.SAFARI_DEFAULT_PROFILE ?? '', 50) || null;
+
 const PROFILE_PROP = {
   profile: {
     type: 'string',
-    description: 'Safari profile name (e.g. "Perso", "Pro"). Omit to use the first connected profile.'
+    description: DEFAULT_PROFILE
+      ? `Safari profile name (e.g. "Perso", "Pro"). Omit to use "${DEFAULT_PROFILE}" (configured default).`
+      : 'Safari profile name (e.g. "Perso", "Pro"). Omit to use the first connected profile.'
   }
 };
 
@@ -499,7 +570,7 @@ rl.on('line', async (line) => {
         result = {
           protocolVersion: MCP_VERSION,
           capabilities: { tools: {} },
-          serverInfo: { name: 'claude-for-safari', version: '1.3.0' }
+          serverInfo: { name: 'claude-for-safari', version: '1.4.0' }
         };
         break;
 
@@ -513,6 +584,7 @@ rl.on('line', async (line) => {
       case 'tools/call': {
         const toolName = params?.name;
         const { profile, ...toolArgs } = params?.arguments ?? {};
+        await waitForRole();
 
         if (toolName === 'safari_list_profiles') {
           let list;
@@ -520,7 +592,11 @@ rl.on('line', async (line) => {
             // Ask primary for the profile list via relay
             list = await callExtension('list_profiles', {}, null);
           } else {
+            await waitForExtension(null);
             list = listProfiles();
+          }
+          if (DEFAULT_PROFILE && Array.isArray(list)) {
+            list = list.map(p => ({ ...p, default: p.name.toLowerCase() === DEFAULT_PROFILE.toLowerCase() }));
           }
           result = {
             content: [{
@@ -536,7 +612,24 @@ rl.on('line', async (line) => {
         const cmd = TOOL_TO_CMD[toolName];
         if (!cmd) throw mcpError(-32602, `Unknown tool: ${toolName}`);
 
-        const data = await callExtension(cmd, toolArgs, profile || null);
+        // The default is resolved here, before any relay: each client's own
+        // configuration applies, never the primary's. No silent fallback to
+        // another profile when the default one is not connected.
+        const target = profile || DEFAULT_PROFILE || null;
+        let data;
+        try {
+          data = await callExtension(cmd, toolArgs, target);
+        } catch (err) {
+          // Same message format in 1.3.0 primaries, so this also works through an older relay target.
+          if (!profile && DEFAULT_PROFILE && err.message?.startsWith(`Profile "${DEFAULT_PROFILE}" not connected`)) {
+            throw new Error(
+              `Default profile "${DEFAULT_PROFILE}" (SAFARI_DEFAULT_PROFILE) is not connected. ` +
+              `${err.message.split('. ').slice(1).join('. ')}. ` +
+              `Open a Safari window in that profile, or pass "profile" explicitly.`
+            );
+          }
+          throw err;
+        }
         result = {
           content: [{
             type: 'text',

@@ -132,6 +132,22 @@ Safari must be open with the extension enabled.
 
 The extension reconnects automatically to the bridge after sleep or after visiting Safari Settings — no manual action required.
 
+### Safari profiles
+
+Each Safari profile runs its own copy of the extension. Give each one a name from the extension's toolbar popup (**Profile name**); unnamed profiles all register as `default`, and Claude then cannot tell them apart. Names are matched case-insensitively (`dev` matches `Dev`).
+
+Every tool accepts a `profile` argument. To make Claude use one profile when it names none — recommended: a profile **dedicated to Claude**, so that it never browses with the sessions and cookies of your personal profiles — set `SAFARI_DEFAULT_PROFILE` in the server entry:
+
+```json
+"safari": {
+  "command": "node",
+  "args": ["/absolute/path/to/claudeForSafari/bridge/bridge.js"],
+  "env": { "SAFARI_DEFAULT_PROFILE": "Dev" }
+}
+```
+
+When that profile is not connected, tools fail with an explicit error instead of falling back to another profile. Without `SAFARI_DEFAULT_PROFILE`, the first connected profile is used, as before.
+
 ---
 
 ## Available tools (13)
