@@ -178,11 +178,15 @@ function waitForLoad(tabId, timeoutMs = 15000) {
 
 // ── Commands ───────────────────────────────────────────────────────────────
 
-async function cmdNavigate({ url, tabId: tId }) {
-  // Block non-http(s) schemes (e.g. javascript:) to prevent unintended execution.
-  if (url && !/^https?:\/\//i.test(url) && !/^about:/i.test(url)) {
-    throw new Error(`Unsupported URL scheme. Only http://, https://, and about: are allowed.`);
+// Block other schemes (javascript:, file:, data:…) on every path that opens a URL.
+function assertAllowedUrl(url) {
+  if (typeof url !== 'string' || !/^(https?:\/\/|about:)/i.test(url)) {
+    throw new Error('Unsupported URL scheme. Only http://, https://, and about: are allowed.');
   }
+}
+
+async function cmdNavigate({ url, tabId: tId }) {
+  assertAllowedUrl(url);
   let tabId;
   if (tId) {
     const tab = await browser.tabs.update(tId, { url });
@@ -310,6 +314,7 @@ async function cmdTabsList() {
 }
 
 async function cmdTabsCreate({ url }) {
+  if (url) assertAllowedUrl(url);
   const target = url || 'about:newtab';
   const tab = await browser.tabs.create({ url: target });
   // tabs.create resolves before the page loads, so tab.url is often empty.
