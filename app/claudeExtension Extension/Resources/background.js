@@ -85,42 +85,48 @@ function connect() {
   if (!profileKnown) return;
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
 
-  ws = new WebSocket(BRIDGE_WS);
+  // Each handler works on its own socket, never on the global `ws`: a socket that
+  // is still closing (e.g. after a profile rename) must not touch its replacement.
+  const socket = new WebSocket(BRIDGE_WS);
+  ws = socket;
 
-  ws.addEventListener('open', () => {
+  socket.addEventListener('open', () => {
     console.log('[Claude Safari] Connected to bridge as profile:', currentProfile);
     clearTimeout(reconnectTimer);
-    ws.send(JSON.stringify({
+    socket.send(JSON.stringify({
       type:    'connected',
       agent:   'safari-extension',
       profile: currentProfile
     }));
   });
 
-  ws.addEventListener('message', async (event) => {
+  socket.addEventListener('message', async (event) => {
     let msg;
     try { msg = JSON.parse(event.data); } catch { return; }
 
     const { id, command, params } = msg;
     if (!id || !command) return;
 
-    let result;
+    let reply;
     try {
-      result = await dispatch(command, params || {});
-      ws.send(JSON.stringify({ id, success: true, result }));
+      reply = { id, success: true, result: await dispatch(command, params || {}) };
     } catch (err) {
-      ws.send(JSON.stringify({ id, success: false, error: err.message || String(err) }));
+      reply = { id, success: false, error: err.message || String(err) };
     }
+    // The bridge only accepts the answer on the socket that carried the command;
+    // if that socket has closed meanwhile, the bridge has already failed the command.
+    if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(reply));
   });
 
-  ws.addEventListener('close', () => {
+  socket.addEventListener('close', () => {
+    if (ws !== socket) return; // already replaced: nothing to clean up or reconnect
     console.log('[Claude Safari] Bridge disconnected — retrying in 3 s');
     ws = null;
     reconnectTimer = setTimeout(connect, RECONNECT_DELAY);
   });
 
-  ws.addEventListener('error', () => {
-    ws.close();
+  socket.addEventListener('error', () => {
+    socket.close();
   });
 }
 
@@ -178,11 +184,15 @@ function waitForLoad(tabId, timeoutMs = 15000) {
 
 // ── Commands ───────────────────────────────────────────────────────────────
 
-async function cmdNavigate({ url, tabId: tId }) {
-  // Block non-http(s) schemes (e.g. javascript:) to prevent unintended execution.
-  if (url && !/^https?:\/\//i.test(url) && !/^about:/i.test(url)) {
-    throw new Error(`Unsupported URL scheme. Only http://, https://, and about: are allowed.`);
+// Block other schemes (javascript:, file:, data:…) on every path that opens a URL.
+function assertAllowedUrl(url) {
+  if (typeof url !== 'string' || !/^(https?:\/\/|about:)/i.test(url)) {
+    throw new Error('Unsupported URL scheme. Only http://, https://, and about: are allowed.');
   }
+}
+
+async function cmdNavigate({ url, tabId: tId }) {
+  assertAllowedUrl(url);
   let tabId;
   if (tId) {
     const tab = await browser.tabs.update(tId, { url });
@@ -310,6 +320,7 @@ async function cmdTabsList() {
 }
 
 async function cmdTabsCreate({ url }) {
+  if (url) assertAllowedUrl(url);
   const target = url || 'about:newtab';
   const tab = await browser.tabs.create({ url: target });
   // tabs.create resolves before the page loads, so tab.url is often empty.

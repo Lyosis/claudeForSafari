@@ -570,7 +570,7 @@ rl.on('line', async (line) => {
         result = {
           protocolVersion: MCP_VERSION,
           capabilities: { tools: {} },
-          serverInfo: { name: 'claude-for-safari', version: '1.4.0' }
+          serverInfo: { name: 'claude-for-safari', version: '1.4.1' }
         };
         break;
 
